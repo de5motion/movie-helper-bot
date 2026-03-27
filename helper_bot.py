@@ -6,12 +6,15 @@ import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import os
+from PIL import Image, ImageDraw, ImageFont
+import io
 
 # ===== CONFIGURATION =====
-TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"  # Helper bot token
-MAIN_BOT_API_URL = "https://movie-bot-7qmx.onrender.com/add_movie"  # ОБНОВЛЕННЫЙ URL
+TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
+MAIN_BOT_API_URL = "https://movie-bot-7qmx.onrender.com/add_movie"
 API_SECRET = "movie_bot_secret_2024_67890"
-ADMIN_ID = 6777360306  # Your Telegram ID
+ADMIN_ID = 6777360306
+PRIVATE_CHANNEL = -1003800629563
 
 # ===== LOGGING =====
 logging.basicConfig(
@@ -19,7 +22,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ===== DATABASE FOR HELPER BOT =====
+# ===== DATABASE =====
 def init_db():
     conn = sqlite3.connect('helper_movies.db')
     cursor = conn.cursor()
@@ -33,6 +36,7 @@ def init_db():
             year INTEGER,
             description TEXT,
             channel_message_id INTEGER,
+            poster_path TEXT,
             status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -44,53 +48,225 @@ def init_db():
 
 init_db()
 
-# ===== HELPER FUNCTIONS =====
+# ===== POSTER GENERATION =====
+def generate_poster(title, year, code, description=""):
+    """Generate beautiful movie poster"""
+    try:
+        # Create image with gradient background
+        img = Image.new('RGB', (800, 1200), color='#0f0f1a')
+        draw = ImageDraw.Draw(img)
+        
+        # Draw gradient-like effect (simple rectangles)
+        for i in range(0, 1200, 50):
+            color_value = 20 + int(i / 1200 * 40)
+            draw.rectangle([0, i, 800, i+50], fill=f'#{color_value:02x}{color_value:02x}{30:02x}')
+        
+        # Draw gold border
+        draw.rectangle([10, 10, 790, 1190], outline='#ffd700', width=4)
+        
+        # Draw inner border
+        draw.rectangle([20, 20, 780, 1180], outline='#ffd700', width=1)
+        
+        # Load fonts
+        try:
+            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 58)
+            year_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 42)
+            code_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
+            desc_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+            tagline_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+        except:
+            title_font = ImageFont.load_default()
+            year_font = ImageFont.load_default()
+            code_font = ImageFont.load_default()
+            desc_font = ImageFont.load_default()
+            tagline_font = ImageFont.load_default()
+        
+        # Draw title (centered, wrapped)
+        title_lines = []
+        words = title.split()
+        current_line = ""
+        for word in words:
+            test_line = current_line + " " + word if current_line else word
+            if len(test_line) <= 25:
+                current_line = test_line
+            else:
+                if current_line:
+                    title_lines.append(current_line)
+                current_line = word
+        if current_line:
+            title_lines.append(current_line)
+        
+        y_offset = 200
+        for line in title_lines:
+            bbox = draw.textbbox((0, 0), line, font=title_font)
+            text_width = bbox[2] - bbox[0]
+            x = (800 - text_width) // 2
+            draw.text((x, y_offset), line, fill='#ffffff', font=title_font)
+            y_offset += 70
+        
+        # Draw year with background
+        year_y = y_offset + 20
+        year_text = str(year) if year else "TBA"
+        bbox = draw.textbbox((0, 0), year_text, font=year_font)
+        text_width = bbox[2] - bbox[0]
+        x = (800 - text_width) // 2
+        draw.text((x, year_y), year_text, fill='#ffd700', font=year_font)
+        
+        # Draw separator
+        separator_y = year_y + 60
+        draw.line([250, separator_y, 550, separator_y], fill='#ffd700', width=3)
+        
+        # Draw code with background
+        code_y = separator_y + 50
+        code_text = f"🔑 CODE: {code}"
+        bbox = draw.textbbox((0, 0), code_text, font=code_font)
+        text_width = bbox[2] - bbox[0]
+        x = (800 - text_width) // 2
+        draw.text((x, code_y), code_text, fill='#ff6666', font=code_font)
+        
+        # Draw description if exists
+        if description:
+            desc_y = code_y + 90
+            desc_lines = []
+            words = description.split()
+            current_line = ""
+            for word in words:
+                test_line = current_line + " " + word if current_line else word
+                if len(test_line) <= 40:
+                    current_line = test_line
+                else:
+                    if current_line:
+                        desc_lines.append(current_line)
+                    current_line = word
+            if current_line:
+                desc_lines.append(current_line)
+            
+            for line in desc_lines[:4]:
+                bbox = draw.textbbox((0, 0), line, font=desc_font)
+                text_width = bbox[2] - bbox[0]
+                x = (800 - text_width) // 2
+                draw.text((x, desc_y), line, fill='#cccccc', font=desc_font)
+                desc_y += 45
+        
+        # Draw tagline/footer
+        footer_y = 1150
+        footer_text = "🎬 @englishmoviews"
+        bbox = draw.textbbox((0, 0), footer_text, font=tagline_font)
+        text_width = bbox[2] - bbox[0]
+        x = (800 - text_width) // 2
+        draw.text((x, footer_y), footer_text, fill='#888888', font=tagline_font)
+        
+        # Save to bytes
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format='PNG', quality=95)
+        img_bytes.seek(0)
+        
+        return img_bytes
+        
+    except Exception as e:
+        logging.error(f"Poster generation error: {e}")
+        return None
+
+def generate_caption(title, year, code, description=""):
+    """Generate beautiful HTML caption for the movie"""
+    caption = f"🎬 <b>{title}</b>\n\n"
+    
+    if year:
+        caption += f"📅 <b>Year:</b> {year}\n"
+    
+    caption += f"🔑 <b>Movie Code:</b> <code>{code}</code>\n\n"
+    
+    if description:
+        caption += f"📝 <b>Description:</b>\n<i>{description[:300]}</i>\n\n"
+    
+    caption += (
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "🎯 <b>How to watch:</b>\n"
+        "1️⃣ Subscribe to @englishmoviews\n"
+        "2️⃣ Send the code <code>{code}</code> to @englishmoviews_bot\n"
+        "3️⃣ Enjoy the movie!\n\n"
+        "✨ <b>Bot:</b> @englishmoviews_bot"
+    ).format(code=code)
+    
+    return caption
+
+def send_poster_to_channel(title, year, code, description=""):
+    """Generate poster and send to channel with beautiful caption"""
+    try:
+        # Generate poster
+        poster = generate_poster(title, year, code, description)
+        if not poster:
+            return None
+        
+        # Generate caption
+        caption = generate_caption(title, year, code, description)
+        
+        # Send to channel
+        url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+        
+        files = {'photo': ('poster.png', poster, 'image/png')}
+        data = {
+            'chat_id': PRIVATE_CHANNEL,
+            'caption': caption,
+            'parse_mode': 'HTML'
+        }
+        
+        response = requests.post(url, data=data, files=files, timeout=30)
+        result = response.json()
+        
+        if result.get('ok'):
+            return result['result']['message_id']
+        else:
+            logging.error(f"Failed to send poster: {result}")
+            return None
+            
+    except Exception as e:
+        logging.error(f"Error sending poster: {e}")
+        return None
+
 def extract_movie_info(text):
-    """Extract movie information from forwarded message (year is optional)"""
+    """Extract movie information from forwarded message"""
     lines = text.split('\n')
     title = None
     year = None
     code = None
+    description = ""
     
     for line in lines:
         line = line.strip()
         if not line:
             continue
         
-        # Check for code like "Code: 12345" or "🔑 Code: 12345"
+        # Check for code
         code_match = re.search(r'(?:Code|Код):?\s*(\d+)', line, re.IGNORECASE)
         if code_match and not code:
             code = code_match.group(1)
             continue
         
-        # Check for title with year like "Movie Title (2024)"
+        # Check for title with year
         match = re.match(r'^(.+?)\s*\((\d{4})\)$', line)
         if match and not title:
             title = match.group(1).strip()
             year = int(match.group(2))
             continue
         
-        # Check for title without year (first non-empty line that's not code)
-        if not title and not code_match and line:
+        # Check for title without year
+        if not title and not code_match and line and not line.startswith(('📝', 'Description', 'desc')):
             title = line
+        
+        # Collect description
+        if line.startswith(('📝', 'Description', 'desc', 'Plot')) or (description and line and not code_match):
+            desc_match = re.sub(r'^[📝]*\s*', '', line)
+            desc_match = re.sub(r'^(Description|Plot):\s*', '', desc_match, flags=re.IGNORECASE)
+            if description:
+                description += " " + desc_match
+            else:
+                description = desc_match
     
-    return title, year, code
-
-def save_pending_movie(code, message_id, title, year, description, channel_msg_id):
-    """Save pending movie to database"""
-    try:
-        conn = sqlite3.connect('helper_movies.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO pending_movies (code, message_id, title, year, description, channel_message_id, status)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending')
-        ''', (code, message_id, title, year if year else 0, description, channel_msg_id))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        logging.error(f"Error saving pending movie: {e}")
-        return False
+    # Clean up description
+    description = ' '.join(description.split())
+    
+    return title, year, code, description[:500]
 
 def send_to_main_bot(code, message_id, title, year, description):
     """Send movie to main bot via API"""
@@ -113,34 +289,54 @@ def send_to_main_bot(code, message_id, title, year, description):
     except Exception as e:
         return False, str(e)
 
+def save_movie_to_db(code, message_id, title, year, description, channel_msg_id):
+    """Save movie to database"""
+    try:
+        conn = sqlite3.connect('helper_movies.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO pending_movies (code, message_id, title, year, description, channel_message_id, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'added')
+        ''', (code, message_id, title, year if year else 0, description, channel_msg_id))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logging.error(f"Error saving movie: {e}")
+        return False
+
 def is_admin(user_id):
-    """Check if user is admin"""
     return user_id == ADMIN_ID
 
 # ===== TELEGRAM HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ You are not authorized to use this bot.")
+        await update.message.reply_text("❌ You are not authorized.")
         return
     
     await update.message.reply_text(
-        "🎬 <b>Helper Bot for Movie Management</b>\n\n"
-        "📌 <b>How to use:</b>\n"
-        "1. Forward a movie message from your PRIVATE CHANNEL to this bot\n"
-        "2. The bot will extract movie info (title, year optional, code)\n"
-        "3. Confirm to add to main bot's database\n\n"
+        "🎬 <b>Movie Poster Bot v2.0</b>\n\n"
+        "✨ <b>Features:</b>\n"
+        "• 🎨 Beautiful movie posters\n"
+        "• 📝 Rich HTML captions\n"
+        "• 🔑 Auto-extract movie info\n"
+        "• 💾 Auto-add to database\n"
+        "• 📤 Send to private channel\n\n"
+        "<b>📌 How to use:</b>\n"
+        "1. Forward a movie message to this bot\n"
+        "2. Bot extracts: Title, Year, Code, Description\n"
+        "3. Generates poster + caption\n"
+        "4. Sends to private channel\n"
+        "5. Adds to main bot database\n\n"
         "<b>Commands:</b>\n"
-        "/pending - Show pending movies\n"
-        "/stats - Show statistics\n"
-        "/cancel - Cancel current operation",
+        "/pending - Show recent movies\n"
+        "/stats - Show statistics",
         parse_mode="HTML"
     )
 
 async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle forwarded messages from private channel"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -149,159 +345,86 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
     
     message = update.message
     
-    # Check if it's a forwarded message
     if not message.forward_from_chat:
         await update.message.reply_text("❌ Please forward a message from your private channel.")
         return
     
-    # Get original message details
     original_msg_id = message.forward_from_message_id
     
-    # Get the text of the forwarded message
     if not message.text:
         await update.message.reply_text("❌ Please forward a text message with movie info.")
         return
     
+    # Show progress
+    progress_msg = await update.message.reply_text("🎨 Processing movie info...")
+    
     # Extract movie info
-    title, year, code = extract_movie_info(message.text)
+    title, year, code, description = extract_movie_info(message.text)
     
     if not title or not code:
-        await update.message.reply_text(
+        await progress_msg.edit_text(
             "❌ Could not extract movie information.\n\n"
             "Make sure the message contains:\n"
-            "• Title (with or without year in parentheses)\n"
+            "• Title (with or without year)\n"
             "• Code: <code>12345</code>\n\n"
             f"<b>Extracted:</b>\n"
-            f"Title: {title if title else 'Not found'}\n"
+            f"Title: {title if title else '❌ Not found'}\n"
             f"Year: {year if year else 'Not found (optional)'}\n"
-            f"Code: {code if code else 'Not found'}",
+            f"Code: {code if code else '❌ Not found'}",
             parse_mode="HTML"
         )
         return
     
+    await progress_msg.edit_text(f"🎨 Generating poster for: <b>{title}</b>", parse_mode="HTML")
+    
+    # Generate and send poster to channel
+    channel_msg_id = send_poster_to_channel(title, year, code, description)
+    
+    if not channel_msg_id:
+        await progress_msg.edit_text("❌ Failed to generate poster. Please try again.")
+        return
+    
+    await progress_msg.edit_text("✅ Poster sent to channel!\n📤 Adding to database...")
+    
     # Save to database
-    save_pending_movie(code, original_msg_id, title, year, message.text, message.message_id)
+    save_movie_to_db(code, original_msg_id, title, year, description, channel_msg_id)
     
-    # Store in context for confirmation
-    context.user_data['pending_movie'] = {
-        'code': code,
-        'message_id': original_msg_id,
-        'title': title,
-        'year': year,
-        'description': message.text[:500],
-        'channel_msg_id': message.message_id
-    }
+    # Send to main bot
+    success, result = send_to_main_bot(code, channel_msg_id, title, year, description)
     
-    # Format preview text
-    year_text = f"📅 Year: {year}" if year else "📅 Year: Not specified"
-    
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Add Movie", callback_data="add_movie")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_movie")]
-    ])
-    
-    await update.message.reply_text(
-        f"📽 <b>Movie Detected!</b>\n\n"
-        f"🎬 Title: <b>{title}</b>\n"
-        f"{year_text}\n"
-        f"🔑 Code: <code>{code}</code>\n\n"
-        f"From Channel Message ID: {original_msg_id}\n\n"
-        f"✅ Add this movie to main bot?",
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
+    if success:
+        year_text = f" ({year})" if year else ""
+        await progress_msg.edit_text(
+            f"✅ <b>Movie Added Successfully!</b>\n\n"
+            f"🎬 {title}{year_text}\n"
+            f"🔑 Code: <code>{code}</code>\n\n"
+            f"📸 <b>Poster & caption sent to channel</b>\n"
+            f"💾 <b>Added to main bot database</b>\n\n"
+            f"✨ Movie is now available for users!",
+            parse_mode="HTML"
+        )
+        logging.info(f"✅ Movie added: {code} - {title}")
+    else:
+        await progress_msg.edit_text(
+            f"⚠️ <b>Poster sent but database error</b>\n\n"
+            f"Error: {result}\n\n"
+            f"Poster is in channel, but movie not added to database.\n"
+            f"Please try again or add manually.",
+            parse_mode="HTML"
+        )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle regular text messages (not forwarded)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
         return
     
     await update.message.reply_text(
-        "Please forward a movie message from your private channel.\n"
+        "📌 Please forward a movie message from your private channel.\n"
         "Use /start for help."
     )
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle callback queries"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    
-    if not is_admin(user_id):
-        await query.edit_message_text("❌ Unauthorized")
-        return
-    
-    data = query.data
-    pending = context.user_data.get('pending_movie')
-    
-    if not pending:
-        await query.edit_message_text("❌ No pending movie. Please forward a new movie.")
-        return
-    
-    if data == "add_movie":
-        # Send to main bot
-        success, result = send_to_main_bot(
-            pending['code'],
-            pending['message_id'],
-            pending['title'],
-            pending['year'],
-            pending['description']
-        )
-        
-        if success:
-            # Update database status
-            conn = sqlite3.connect('helper_movies.db')
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE pending_movies SET status = 'added' WHERE code = ? AND channel_message_id = ?",
-                (pending['code'], pending['channel_msg_id'])
-            )
-            conn.commit()
-            conn.close()
-            
-            year_text = f"({pending['year']})" if pending['year'] else ""
-            await query.edit_message_text(
-                f"✅ <b>Movie Added Successfully!</b>\n\n"
-                f"🎬 {pending['title']} {year_text}\n"
-                f"🔑 Code: <code>{pending['code']}</code>\n\n"
-                f"Movie is now available in the main bot.",
-                parse_mode="HTML"
-            )
-            logging.info(f"Movie {pending['code']} added to main bot")
-        else:
-            await query.edit_message_text(
-                f"❌ <b>Failed to add movie</b>\n\n"
-                f"Error: {result}\n\n"
-                f"Please check that the main bot is running and accessible.\n"
-                f"API URL: {MAIN_BOT_API_URL}",
-                parse_mode="HTML"
-            )
-        
-        # Clear context
-        context.user_data.pop('pending_movie', None)
-    
-    elif data == "cancel_movie":
-        # Update database status
-        conn = sqlite3.connect('helper_movies.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE pending_movies SET status = 'cancelled' WHERE code = ? AND channel_message_id = ?",
-            (pending['code'], pending['channel_msg_id'])
-        )
-        conn.commit()
-        conn.close()
-        
-        await query.edit_message_text(
-            f"❌ Cancelled.\n\nMovie {pending['title']} was not added.",
-            parse_mode="HTML"
-        )
-        context.user_data.pop('pending_movie', None)
-
 async def pending_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show pending movies"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -311,16 +434,16 @@ async def pending_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('helper_movies.db')
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT code, title, year, created_at FROM pending_movies WHERE status = 'pending' ORDER BY created_at DESC"
+        "SELECT code, title, year, created_at FROM pending_movies WHERE status = 'added' ORDER BY created_at DESC LIMIT 20"
     )
     movies = cursor.fetchall()
     conn.close()
     
     if not movies:
-        await update.message.reply_text("📭 No pending movies.")
+        await update.message.reply_text("📭 No movies added yet.")
         return
     
-    text = "📋 <b>Pending Movies:</b>\n\n"
+    text = "📋 <b>Recently Added Movies:</b>\n\n"
     for code, title, year, created_at in movies:
         year_text = f" ({year})" if year and year != 0 else ""
         text += f"• <b>{title}</b>{year_text} - <code>{code}</code>\n"
@@ -329,7 +452,6 @@ async def pending_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show helper bot statistics"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -339,60 +461,37 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('helper_movies.db')
     cursor = conn.cursor()
     
-    cursor.execute("SELECT COUNT(*) FROM pending_movies WHERE status = 'pending'")
-    pending = cursor.fetchone()[0]
-    
     cursor.execute("SELECT COUNT(*) FROM pending_movies WHERE status = 'added'")
     added = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM pending_movies WHERE status = 'cancelled'")
-    cancelled = cursor.fetchone()[0]
     
     conn.close()
     
     await update.message.reply_text(
-        f"📊 <b>Helper Bot Statistics</b>\n\n"
-        f"⏳ Pending: {pending}\n"
-        f"✅ Added: {added}\n"
-        f"❌ Cancelled: {cancelled}\n"
-        f"📦 Total Processed: {pending + added + cancelled}",
+        f"📊 <b>Movie Poster Bot Statistics</b>\n\n"
+        f"✅ Movies added: {added}\n"
+        f"🎬 Posters generated: {added}\n"
+        f"📝 Captions generated: {added}\n\n"
+        f"✨ All movies have:\n"
+        f"• Beautiful poster\n"
+        f"• Rich HTML caption\n"
+        f"• Auto-added to database",
         parse_mode="HTML"
     )
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel current operation"""
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Unauthorized")
-        return
-    
-    if context.user_data.get('pending_movie'):
-        context.user_data.pop('pending_movie')
-        await update.message.reply_text("✅ Current operation cancelled.")
-    else:
-        await update.message.reply_text("ℹ️ No pending operation.")
-
 # ===== MAIN =====
 def main():
-    """Start the bot"""
-    # Create application
     application = Application.builder().token(TOKEN).build()
     
-    # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("pending", pending_movies))
     application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.FORWARDED, handle_text))
     application.add_handler(MessageHandler(filters.FORWARDED, handle_forwarded_message))
     
-    # Start bot
-    print("🤖 Helper Bot started...")
-    print(f"Main bot API URL: {MAIN_BOT_API_URL}")
-    print(f"Admin ID: {ADMIN_ID}")
-    print("Year is optional - movies can be added with or without year")
+    print("🤖 Movie Poster Bot v2.0 started...")
+    print(f"✅ Main bot API: {MAIN_BOT_API_URL}")
+    print(f"✅ Private channel: {PRIVATE_CHANNEL}")
+    print("✨ Features: Beautiful posters + Rich captions")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
