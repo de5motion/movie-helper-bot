@@ -8,10 +8,10 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 import os
 
 # ===== CONFIGURATION =====
-TOKEN = "8616873829:AAF0BF9bx4R4wEcMzvhk24zD75Kl82Ieedo"  # Helper bot token
+TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"  # НОВЫЙ ТОКЕН helper бота
 MAIN_BOT_API_URL = "https://movie-bot-8-9cnw.onrender.com/add_movie"
 API_SECRET = "movie_bot_secret_2024_67890"
-ADMIN_ID = 6777360306  # Your Telegram ID
+ADMIN_ID = 6777360306
 
 # ===== LOGGING =====
 logging.basicConfig(
@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ===== DATABASE FOR HELPER BOT (stores pending movies) =====
+# ===== DATABASE =====
 def init_db():
     conn = sqlite3.connect('helper_movies.db')
     cursor = conn.cursor()
@@ -46,7 +46,6 @@ init_db()
 
 # ===== HELPER FUNCTIONS =====
 def extract_movie_info(text):
-    """Extract movie information from forwarded message"""
     lines = text.split('\n')
     title = None
     year = None
@@ -54,13 +53,11 @@ def extract_movie_info(text):
     
     for line in lines:
         line = line.strip()
-        # Check for title and year like "Movie Title (2024)"
         match = re.match(r'^(.+?)\s*\((\d{4})\)$', line)
         if match and not title:
             title = match.group(1).strip()
             year = int(match.group(2))
         
-        # Check for code like "Code: 12345" or "🔑 Code: 12345"
         code_match = re.search(r'(?:Code|Код):?\s*(\d+)', line, re.IGNORECASE)
         if code_match and not code:
             code = code_match.group(1)
@@ -68,7 +65,6 @@ def extract_movie_info(text):
     return title, year, code
 
 def save_pending_movie(code, message_id, title, year, description, channel_msg_id):
-    """Save pending movie to database"""
     try:
         conn = sqlite3.connect('helper_movies.db')
         cursor = conn.cursor()
@@ -84,7 +80,6 @@ def save_pending_movie(code, message_id, title, year, description, channel_msg_i
         return False
 
 def send_to_main_bot(code, message_id, title, year, description):
-    """Send movie to main bot via API"""
     try:
         data = {
             'secret': API_SECRET,
@@ -105,12 +100,10 @@ def send_to_main_bot(code, message_id, title, year, description):
         return False, str(e)
 
 def is_admin(user_id):
-    """Check if user is admin"""
     return user_id == ADMIN_ID
 
 # ===== TELEGRAM HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -131,7 +124,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle forwarded messages from private channel"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -140,21 +132,16 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
     
     message = update.message
     
-    # Check if it's a forwarded message
     if not message.forward_from_chat:
         await update.message.reply_text("❌ Please forward a message from your private channel.")
         return
     
-    # Get original message details
     original_msg_id = message.forward_from_message_id
-    forwarded_from = message.forward_from_chat
     
-    # Get the text of the forwarded message
     if not message.text:
         await update.message.reply_text("❌ Please forward a text message with movie info.")
         return
     
-    # Extract movie info
     title, year, code = extract_movie_info(message.text)
     
     if not title or not year or not code:
@@ -171,10 +158,8 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
         )
         return
     
-    # Save to database
     save_pending_movie(code, original_msg_id, title, year, message.text, message.message_id)
     
-    # Store in context for confirmation
     context.user_data['pending_movie'] = {
         'code': code,
         'message_id': original_msg_id,
@@ -201,7 +186,6 @@ async def handle_forwarded_message(update: Update, context: ContextTypes.DEFAULT
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle regular text messages (not forwarded)"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -213,7 +197,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle callback queries"""
     query = update.callback_query
     await query.answer()
     
@@ -231,7 +214,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if data == "add_movie":
-        # Send to main bot
         success, result = send_to_main_bot(
             pending['code'],
             pending['message_id'],
@@ -241,7 +223,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         if success:
-            # Update database status
             conn = sqlite3.connect('helper_movies.db')
             cursor = conn.cursor()
             cursor.execute(
@@ -267,11 +248,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
         
-        # Clear context
         context.user_data.pop('pending_movie', None)
     
     elif data == "cancel_movie":
-        # Update database status
         conn = sqlite3.connect('helper_movies.db')
         cursor = conn.cursor()
         cursor.execute(
@@ -288,7 +267,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop('pending_movie', None)
 
 async def pending_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show pending movies"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -315,7 +293,6 @@ async def pending_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show helper bot statistics"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -346,7 +323,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel current operation"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -361,11 +337,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== MAIN =====
 def main():
-    """Start the bot"""
-    # Create application
     application = Application.builder().token(TOKEN).build()
     
-    # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("pending", pending_movies))
     application.add_handler(CommandHandler("stats", stats))
@@ -374,7 +347,6 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.FORWARDED, handle_text))
     application.add_handler(MessageHandler(filters.FORWARDED, handle_forwarded_message))
     
-    # Start bot
     print("🤖 Helper Bot started...")
     print(f"Main bot API URL: {MAIN_BOT_API_URL}")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
