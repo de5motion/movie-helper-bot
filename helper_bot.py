@@ -9,6 +9,7 @@ TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
 MAIN_BOT_API_URL = "https://movie-bot-7qmx.onrender.com/add_movie"
 API_SECRET = "movie_bot_secret_2024_67890"
 ADMIN_ID = 6777360306
+PRIVATE_CHANNEL = -1003800629563  # ID вашего приватного канала
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -93,75 +94,93 @@ def webhook():
         if not update:
             return 'ok', 200
 
-        if 'message' in update:
-            msg = update['message']
-            user_id = msg['from']['id']
-            if user_id != ADMIN_ID:
-                return 'ok', 200
+        # ===== СООБЩЕНИЯ ИЗ КАНАЛА =====
+        if 'channel_post' in update:
+            msg = update['channel_post']
             chat_id = msg['chat']['id']
-
-            if 'text' in msg and msg['text'] == '/start':
-                send_message(chat_id, "🎬 Forward a movie message.\nBot will ask for confirmation.")
+            
+            # Проверяем, что это наш приватный канал
+            if chat_id != PRIVATE_CHANNEL:
                 return 'ok', 200
-
-            if 'forward_from_chat' in msg and msg.get('text'):
-                title, year, code = extract_movie_info(msg['text'])
-                if not title or not code:
-                    send_message(chat_id, "❌ Could not extract title or code.")
-                    return 'ok', 200
-
-                save_pending_movie(code, msg['forward_from_message_id'], title, year, msg['text'], msg['message_id'])
-
-                keyboard = {
-                    "inline_keyboard": [
-                        [{"text": "✅ Add Movie", "callback_data": f"add_{code}"}],
-                        [{"text": "❌ Cancel", "callback_data": f"cancel_{code}"}]
-                    ]
-                }
-                send_message(chat_id,
-                    f"📽 <b>Movie Detected!</b>\n\n"
-                    f"🎬 {title}\n"
-                    f"📅 Year: {year if year else 'Not specified'}\n"
-                    f"🔑 Code: <code>{code}</code>\n\n"
-                    f"Add to main bot?",
-                    reply_markup=keyboard)
-
+            
+            text = msg.get('text') or msg.get('caption', '')
+            if not text:
+                return 'ok', 200
+            
+            # Извлекаем информацию
+            title, year, code = extract_movie_info(text)
+            if not title or not code:
+                logging.warning(f"Не удалось извлечь: {text[:100]}")
+                return 'ok', 200
+            
+            # Сохраняем как pending
+            save_pending_movie(code, msg['message_id'], title, year, text[:500], msg['message_id'])
+            
+            # Отправляем админу кнопки
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "✅ Add Movie", "callback_data": f"add_{code}"}],
+                    [{"text": "❌ Cancel", "callback_data": f"cancel_{code}"}]
+                ]
+            }
+            send_message(ADMIN_ID,
+                f"📽 <b>Новый фильм в канале!</b>\n\n"
+                f"🎬 {title}\n"
+                f"📅 Год: {year if year else 'не указан'}\n"
+                f"🔑 Код: <code>{code}</code>\n\n"
+                f"Добавить в базу?",
+                reply_markup=keyboard)
+        
+        # ===== ОТВЕТ НА КНОПКИ =====
         elif 'callback_query' in update:
             q = update['callback_query']
             user_id = q['from']['id']
             if user_id != ADMIN_ID:
                 answer_callback(q['id'])
                 return 'ok', 200
-
+            
             data = q['data']
             action, code = data.split('_')
-            chat_id = q['message']['chat']['id']
-
+            
             conn = sqlite3.connect('helper_movies.db')
             cursor = conn.cursor()
             cursor.execute("SELECT title, year, message_id, description FROM pending_movies WHERE code=? AND status='pending'", (code,))
             movie = cursor.fetchone()
             if not movie:
-                send_message(chat_id, "❌ Movie not found.")
+                send_message(ADMIN_ID, "❌ Фильм не найден.")
                 answer_callback(q['id'])
                 return 'ok', 200
             title, year, msg_id, desc = movie
-
+            
             if action == 'add':
                 ok, _ = send_to_main_bot(code, msg_id, title, year, desc)
                 if ok:
                     cursor.execute("UPDATE pending_movies SET status='added' WHERE code=?", (code,))
-                    send_message(chat_id, f"✅ <b>{title}</b> added to main bot!")
+                    send_message(ADMIN_ID, f"✅ <b>{title}</b> добавлен в базу!")
                 else:
-                    send_message(chat_id, f"❌ Failed to add <b>{title}</b>.")
+                    send_message(ADMIN_ID, f"❌ Ошибка добавления <b>{title}</b>.")
             else:
                 cursor.execute("UPDATE pending_movies SET status='cancelled' WHERE code=?", (code,))
-                send_message(chat_id, f"❌ <b>{title}</b> cancelled.")
-
+                send_message(ADMIN_ID, f"❌ <b>{title}</b> отменён.")
+            
             conn.commit()
             conn.close()
             answer_callback(q['id'])
-
+        
+        # ===== ОБЫЧНЫЕ СООБЩЕНИЯ (для /start) =====
+        elif 'message' in update:
+            msg = update['message']
+            user_id = msg['from']['id']
+            if user_id != ADMIN_ID:
+                return 'ok', 200
+            chat_id = msg['chat']['id']
+            if msg.get('text') == '/start':
+                send_message(chat_id,
+                    "🎬 <b>Helper Bot (с кнопками)</b>\n\n"
+                    "Бот автоматически определяет новые фильмы в приватном канале\n"
+                    "и присылает кнопки подтверждения.\n\n"
+                    "Просто отправь фильм в канал — я спрошу, добавлять или нет.")
+        
         return 'ok', 200
     except Exception as e:
         logging.error(f"Webhook error: {e}")
@@ -169,7 +188,7 @@ def webhook():
 
 @app.route('/')
 def index():
-    return "🎬 Helper Bot is running!"
+    return "🎬 Helper Bot is running (auto + buttons)!"
 
 @app.route('/health')
 def health():
