@@ -10,12 +10,7 @@ import traceback
 # ===== CONFIGURATION =====
 TOKEN = "8660161351:AAGdM3sN3Sfi3zd8T0e_AOeFjhwAczQDyHw"
 PRIVATE_CHANNEL = -1003800629563
-ADMIN_ID = 123456789  # ЗАМЕНИТЕ НА ВАШ TELEGRAM ID
-
-# ===== IMPORTANT: This bot uses a DIFFERENT webhook path =====
-# It will NOT interfere with your main bot because Flask can handle multiple routes
-# Your main bot uses: /{TOKEN}
-# This helper uses: /helper/{TOKEN}
+ADMIN_ID = 6777360306  # Your correct Telegram ID
 
 # ===== INITIALIZE FLASK =====
 app = Flask(__name__)
@@ -145,6 +140,7 @@ def save_movie(code, message_id, title, year, description=""):
         ''', (code.upper(), message_id, title, year, description))
         conn.commit()
         conn.close()
+        logging.info(f"Movie saved: {code} - {title}")
         return True
     except Exception as e:
         logging.error(f"Error saving: {e}")
@@ -178,9 +174,9 @@ def delete_movie(code):
 
 # ===== PROCESS UPDATES =====
 def process_update(update):
-    """Process updates - only for helper bot"""
+    """Process updates"""
     try:
-        # Handle channel posts
+        # Handle channel posts (auto-detect new movies)
         if "channel_post" in update:
             post = update["channel_post"]
             chat_id = post["chat"]["id"]
@@ -191,6 +187,7 @@ def process_update(update):
                 text = post.get("text", "")
                 content = caption or text
                 
+                # Extract movie info
                 title, year = extract_movie_info(content)
                 code = f"INT{message_id}"
                 
@@ -208,25 +205,26 @@ def process_update(update):
                 keyboard = {
                     "inline_keyboard": [
                         [
-                            {"text": "✅ ADD", "callback_data": f"add_{message_id}"},
+                            {"text": "✅ ADD MOVIE", "callback_data": f"add_{message_id}"},
                             {"text": "❌ SKIP", "callback_data": f"skip_{message_id}"}
                         ],
                         [
-                            {"text": "📋 VIEW", "callback_data": f"view_{message_id}"}
+                            {"text": "📋 VIEW DETAILS", "callback_data": f"view_{message_id}"}
                         ]
                     ]
                 }
                 
                 send_message(
                     ADMIN_ID,
-                    f"🎬 <b>NEW MOVIE!</b>\n\n"
-                    f"📝 Title: {title}\n"
-                    f"📅 Year: {year if year else 'Unknown'}\n"
-                    f"🆔 Message ID: <code>{message_id}</code>\n"
-                    f"🔑 Code: <code>{code}</code>\n\n"
-                    f"📄 Preview:\n{content[:150]}",
+                    f"🎬 <b>NEW MOVIE DETECTED!</b>\n\n"
+                    f"📝 <b>Title:</b> {title}\n"
+                    f"📅 <b>Year:</b> {year if year else 'Unknown'}\n"
+                    f"🆔 <b>Message ID:</b> <code>{message_id}</code>\n"
+                    f"🔑 <b>Auto Code:</b> <code>{code}</code>\n\n"
+                    f"📄 <b>Preview:</b>\n{content[:150]}...",
                     keyboard
                 )
+                logging.info(f"New movie detected: {message_id} - {title}")
                 return
         
         # Handle messages
@@ -235,9 +233,9 @@ def process_update(update):
             chat_id = message["chat"]["id"]
             user_id = message["from"]["id"]
             
-            # Only admin
+            # Only admin can use commands
             if user_id != ADMIN_ID:
-                send_message(chat_id, "⛔ Admin only")
+                send_message(chat_id, "⛔ <b>Access Denied</b>\n\nThis bot is for admin use only.")
                 return
             
             if "text" in message:
@@ -247,49 +245,53 @@ def process_update(update):
                     keyboard = {
                         "inline_keyboard": [
                             [{"text": "📋 ALL MOVIES", "callback_data": "list_all"}],
-                            [{"text": "⏳ PENDING", "callback_data": "list_pending"}],
-                            [{"text": "🔍 GET MSG INFO", "callback_data": "get_msg_info"}]
+                            [{"text": "⏳ PENDING MOVIES", "callback_data": "list_pending"}],
+                            [{"text": "🔍 GET MESSAGE INFO", "callback_data": "get_msg_info"}],
+                            [{"text": "➕ ADD MANUAL", "callback_data": "add_manual"}]
                         ]
                     }
                     send_message(
                         chat_id,
-                        "<b>🎬 MOVIE ID HELPER</b>\n\n"
-                        "<b>Commands:</b>\n"
+                        "<b>🎬 MOVIE ID HELPER BOT</b>\n\n"
+                        "<b>📌 Commands:</b>\n"
                         "/list - Show all movies\n"
-                        "/pending - Show pending\n"
+                        "/pending - Show pending movies\n"
                         "/get MSG_ID - Get message info\n"
-                        "/forward MSG_ID - Forward to you\n"
-                        "/add CODE MSG_ID TITLE YEAR - Add movie\n"
+                        "/forward MSG_ID - Forward message to you\n"
+                        "/add CODE MSG_ID TITLE YEAR - Add movie manually\n"
                         "/delete CODE - Delete movie\n\n"
-                        f"Channel: <code>{PRIVATE_CHANNEL}</code>",
+                        f"<b>📢 Channel ID:</b> <code>{PRIVATE_CHANNEL}</code>\n\n"
+                        "<i>When you send a movie to the channel, it will auto-detect!</i>",
                         keyboard
                     )
                 
                 elif text == "/list":
                     movies = get_all_movies()
                     if movies:
-                        response = "<b>📋 ALL MOVIES:</b>\n\n"
-                        for code, msg_id, title, year, desc in movies[:20]:
+                        response = "<b>📋 ALL MOVIES IN DATABASE:</b>\n\n"
+                        for code, msg_id, title, year, desc in movies:
                             response += f"• <b>{title}</b> ({year})\n"
-                            response += f"  Code: <code>{code}</code> | Msg ID: <code>{msg_id}</code>\n\n"
+                            response += f"  🔑 Code: <code>{code}</code> | 🆔 Msg ID: <code>{msg_id}</code>\n\n"
                         send_message(chat_id, response[:4000])
                     else:
-                        send_message(chat_id, "No movies")
+                        send_message(chat_id, "📭 <b>No movies in database</b>\n\nAdd movies by sending them to your private channel!")
                 
                 elif text == "/pending":
                     conn = sqlite3.connect('movies_helper.db')
                     cursor = conn.cursor()
-                    cursor.execute("SELECT id, message_id, title, year FROM pending_movies")
+                    cursor.execute("SELECT id, message_id, title, year FROM pending_movies ORDER BY date_received DESC")
                     pending = cursor.fetchall()
                     conn.close()
                     
                     if pending:
-                        response = "<b>⏳ PENDING:</b>\n\n"
+                        response = "<b>⏳ PENDING MOVIES (Awaiting Approval):</b>\n\n"
                         for pid, msg_id, title, year in pending:
-                            response += f"• Msg ID: <code>{msg_id}</code> - {title[:40]}\n"
+                            response += f"• 🆔 Msg ID: <code>{msg_id}</code>\n"
+                            response += f"  📝 Title: {title}\n"
+                            response += f"  📅 Year: {year if year else 'Unknown'}\n\n"
                         send_message(chat_id, response)
                     else:
-                        send_message(chat_id, "No pending")
+                        send_message(chat_id, "✅ <b>No pending movies</b>\n\nAll movies have been processed!")
                 
                 elif text.startswith("/get"):
                     parts = text.split()
@@ -303,20 +305,20 @@ def process_update(update):
                                 content = msg.get("text", msg.get("caption", "No text"))
                                 
                                 response = (
-                                    f"<b>📝 MESSAGE INFO</b>\n\n"
-                                    f"Message ID: <code>{msg['message_id']}</code>\n"
-                                    f"Date: {datetime.fromtimestamp(msg['date'])}\n"
-                                    f"Content: {content[:300]}\n\n"
-                                    f"<b>Use in main bot:</b>\n"
+                                    f"<b>📝 MESSAGE INFORMATION</b>\n\n"
+                                    f"🆔 <b>Message ID:</b> <code>{msg['message_id']}</code>\n"
+                                    f"📅 <b>Date:</b> {datetime.fromtimestamp(msg['date']).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                                    f"📄 <b>Content:</b>\n{content[:300]}\n\n"
+                                    f"<b>✨ Use this in your main bot:</b>\n"
                                     f"<code>message_id = {msg['message_id']}</code>"
                                 )
                                 send_message(chat_id, response)
                             else:
-                                send_message(chat_id, f"❌ Message {msg_id} not found")
+                                send_message(chat_id, f"❌ <b>Message {msg_id} not found</b>\n\nMake sure the message exists in your private channel.")
                         except ValueError:
-                            send_message(chat_id, "❌ Invalid ID")
+                            send_message(chat_id, "❌ <b>Invalid message ID</b>\n\nUse: /get 12345")
                     else:
-                        send_message(chat_id, "Usage: /get MESSAGE_ID")
+                        send_message(chat_id, "❌ <b>Usage:</b> /get MESSAGE_ID\n\nExample: /get 12345")
                 
                 elif text.startswith("/forward"):
                     parts = text.split()
@@ -325,13 +327,13 @@ def process_update(update):
                             msg_id = int(parts[1])
                             result = forward_message(chat_id, PRIVATE_CHANNEL, msg_id)
                             if result and result.get("ok"):
-                                send_message(chat_id, f"✅ Message {msg_id} forwarded!")
+                                send_message(chat_id, f"✅ <b>Message {msg_id} forwarded to you!</b>\n\nCheck your chat for the message.")
                             else:
-                                send_message(chat_id, f"❌ Failed")
+                                send_message(chat_id, f"❌ <b>Failed to forward message {msg_id}</b>\n\nMake sure the message exists.")
                         except ValueError:
-                            send_message(chat_id, "❌ Invalid ID")
+                            send_message(chat_id, "❌ <b>Invalid message ID</b>")
                     else:
-                        send_message(chat_id, "Usage: /forward MESSAGE_ID")
+                        send_message(chat_id, "❌ <b>Usage:</b> /forward MESSAGE_ID\n\nExample: /forward 12345")
                 
                 elif text.startswith("/add"):
                     parts = text.split(maxsplit=4)
@@ -341,30 +343,36 @@ def process_update(update):
                             msg_id = int(msg_id)
                             year = int(year)
                             if save_movie(code, msg_id, title, year):
-                                send_message(chat_id, f"✅ Added!\nCode: {code}\nMsg ID: {msg_id}")
+                                send_message(chat_id, f"✅ <b>Movie added successfully!</b>\n\n🔑 Code: <code>{code}</code>\n📝 Title: {title}\n🆔 Msg ID: <code>{msg_id}</code>")
                             else:
-                                send_message(chat_id, "❌ Failed")
+                                send_message(chat_id, "❌ <b>Failed to add movie</b>\n\nCheck the database.")
                         except ValueError:
-                            send_message(chat_id, "❌ Invalid ID or year")
+                            send_message(chat_id, "❌ <b>Invalid message ID or year</b>\n\nMessage ID and year must be numbers.")
                     else:
-                        send_message(chat_id, "Format: /add CODE MESSAGE_ID TITLE YEAR")
+                        send_message(chat_id, "❌ <b>Usage:</b> /add CODE MESSAGE_ID TITLE YEAR\n\nExample:\n/add INT001 12345 'Inception' 2010")
                 
                 elif text.startswith("/delete"):
                     parts = text.split()
                     if len(parts) == 2:
-                        if delete_movie(parts[1]):
-                            send_message(chat_id, f"✅ Deleted {parts[1]}")
+                        code = parts[1]
+                        if delete_movie(code):
+                            send_message(chat_id, f"✅ <b>Movie {code} deleted successfully!</b>")
                         else:
-                            send_message(chat_id, "❌ Not found")
+                            send_message(chat_id, f"❌ <b>Movie {code} not found</b>")
                     else:
-                        send_message(chat_id, "Format: /delete CODE")
+                        send_message(chat_id, "❌ <b>Usage:</b> /delete CODE\n\nExample: /delete INT001")
+                
+                elif text.startswith("/"):
+                    send_message(chat_id, "❌ <b>Unknown command</b>\n\nUse /start to see available commands.")
         
-        # Handle callbacks
+        # Handle callback queries
         elif "callback_query" in update:
             callback = update["callback_query"]
             chat_id = callback["message"]["chat"]["id"]
+            message_id = callback["message"]["message_id"]
             data = callback["data"]
             
+            # Answer callback
             try:
                 url = f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery"
                 requests.post(url, json={"callback_query_id": callback["id"]})
@@ -373,6 +381,7 @@ def process_update(update):
             
             if data.startswith("add_"):
                 msg_id = int(data.split("_")[1])
+                
                 conn = sqlite3.connect('movies_helper.db')
                 cursor = conn.cursor()
                 cursor.execute("SELECT title, year, description FROM pending_movies WHERE message_id = ?", (msg_id,))
@@ -381,10 +390,14 @@ def process_update(update):
                 if result:
                     title, year, desc = result
                     code = f"INT{msg_id}"
-                    save_movie(code, msg_id, title, year, desc)
-                    cursor.execute("DELETE FROM pending_movies WHERE message_id = ?", (msg_id,))
-                    conn.commit()
-                    send_message(chat_id, f"✅ Added!\nCode: {code}\nTitle: {title}")
+                    if save_movie(code, msg_id, title, year, desc):
+                        cursor.execute("DELETE FROM pending_movies WHERE message_id = ?", (msg_id,))
+                        conn.commit()
+                        send_message(chat_id, f"✅ <b>Movie added to database!</b>\n\n🔑 Code: <code>{code}</code>\n📝 Title: {title}\n🆔 Msg ID: <code>{msg_id}</code>")
+                    else:
+                        send_message(chat_id, "❌ <b>Failed to add movie</b>")
+                else:
+                    send_message(chat_id, "❌ <b>Movie not found in pending</b>")
                 conn.close()
             
             elif data.startswith("skip_"):
@@ -394,81 +407,68 @@ def process_update(update):
                 cursor.execute("DELETE FROM pending_movies WHERE message_id = ?", (msg_id,))
                 conn.commit()
                 conn.close()
-                send_message(chat_id, f"⏭️ Skipped {msg_id}")
+                send_message(chat_id, f"⏭️ <b>Skipped message {msg_id}</b>\n\nYou can always add it manually with /add")
             
             elif data == "list_all":
                 movies = get_all_movies()
                 if movies:
-                    response = "<b>📋 MOVIES:</b>\n\n"
-                    for code, msg_id, title, year, desc in movies[:10]:
+                    response = "<b>📋 MOVIES IN DATABASE:</b>\n\n"
+                    for code, msg_id, title, year, desc in movies[:15]:
                         response += f"• {title} ({year}) - <code>{code}</code>\n"
+                    if len(movies) > 15:
+                        response += f"\n... and {len(movies)-15} more\nUse /list for full list"
                     send_message(chat_id, response)
+                else:
+                    send_message(chat_id, "📭 No movies in database")
             
             elif data == "list_pending":
                 conn = sqlite3.connect('movies_helper.db')
                 cursor = conn.cursor()
-                cursor.execute("SELECT message_id, title FROM pending_movies")
+                cursor.execute("SELECT message_id, title, year FROM pending_movies ORDER BY date_received DESC")
                 pending = cursor.fetchall()
                 conn.close()
+                
                 if pending:
-                    response = "<b>⏳ PENDING:</b>\n\n"
-                    for msg_id, title in pending:
-                        response += f"• Msg ID: <code>{msg_id}</code> - {title[:40]}\n"
+                    response = "<b>⏳ PENDING MOVIES:</b>\n\n"
+                    for msg_id, title, year in pending:
+                        response += f"• 🆔 <code>{msg_id}</code> - {title}"
+                        if year:
+                            response += f" ({year})"
+                        response += "\n"
                     send_message(chat_id, response)
+                else:
+                    send_message(chat_id, "✅ No pending movies")
             
             elif data == "get_msg_info":
-                send_message(chat_id, "Send /get MESSAGE_ID")
+                send_message(chat_id, "🔍 <b>Get Message Info</b>\n\nSend: /get MESSAGE_ID\n\nExample: /get 12345")
+            
+            elif data == "add_manual":
+                send_message(chat_id, "➕ <b>Add Movie Manually</b>\n\nUse command:\n<code>/add CODE MESSAGE_ID TITLE YEAR</code>\n\nExample:\n<code>/add INT001 12345 'Inception' 2010</code>")
     
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"Error processing update: {e}")
         logging.error(traceback.format_exc())
 
-# ===== FLASK ROUTES - DIFFERENT PATH TO AVOID CONFLICT =====
+# ===== FLASK ROUTES =====
 @app.route('/helper', methods=['POST'])
 def helper_webhook():
-    """Helper bot webhook - different path from main bot"""
+    """Helper bot webhook"""
     try:
         update = request.get_json()
         if update:
-            logging.info(f"Helper received update")
+            logging.info(f"Helper received update: {update.get('update_id')}")
             process_update(update)
         return jsonify({'status': 'ok'})
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"Webhook error: {e}")
         return jsonify({'status': 'error'}), 500
 
 @app.route('/')
 def index():
-    return "🎬 Movie ID Helper is running!"
+    return "🎬 Movie ID Helper Bot is running!\n\nSend /start to the bot to begin."
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'healthy', 'bot': 'helper'})
-
-# ===== SETUP =====
-def setup_webhook():
-    """Setup webhook for helper bot on different path"""
+    """Health check"""
     try:
-        app_name = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
-        if app_name:
-            # Different path to avoid conflict with main bot
-            webhook_url = f"https://{app_name}/helper"
-            url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
-            response = requests.post(url, json={"url": webhook_url}, timeout=10)
-            
-            if response.json().get("ok"):
-                logging.info(f"✅ Helper webhook set: {webhook_url}")
-                return True
-            else:
-                logging.error(f"❌ Failed: {response.text}")
-                return False
-        return False
-    except Exception as e:
-        logging.error(f"Error: {e}")
-        return False
-
-# ===== START =====
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    setup_webhook()
-    app.run(host='0.0.0.0', port=port)
+        conn = sqlite
