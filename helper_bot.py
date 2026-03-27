@@ -10,10 +10,6 @@ import io
 
 # ===== CONFIGURATION =====
 TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
-
-@app.route(f'/{TOKEN}', methods=['POST'])
-def webhook():
-    return jsonify({'status': 'ok'}), 200
 MAIN_BOT_API_URL = "https://movie-bot-7qmx.onrender.com/add_movie"
 API_SECRET = "movie_bot_secret_2024_67890"
 ADMIN_ID = 6777360306
@@ -341,7 +337,7 @@ if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     
     # Set webhook
-    webhook_url = f"https://movie-helper-bot.onrender.com/{TOKEN}"
+    webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
     try:
         requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}")
         logging.info(f"✅ Webhook set to {webhook_url}")
