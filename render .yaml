@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: movie-helper-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python helper_bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
