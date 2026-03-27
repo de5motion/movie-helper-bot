@@ -1,7 +1,6 @@
 import logging
 import sqlite3
 import re
-from datetime import datetime
 import requests
 from flask import Flask, request, jsonify
 import os
@@ -101,12 +100,10 @@ def webhook():
                 return 'ok', 200
             chat_id = msg['chat']['id']
 
-            # /start
             if 'text' in msg and msg['text'] == '/start':
                 send_message(chat_id, "🎬 Forward a movie message.\nBot will ask for confirmation.")
                 return 'ok', 200
 
-            # forwarded
             if 'forward_from_chat' in msg and msg.get('text'):
                 title, year, code = extract_movie_info(msg['text'])
                 if not title or not code:
@@ -122,7 +119,11 @@ def webhook():
                     ]
                 }
                 send_message(chat_id,
-                    f"📽 Movie Detected!\n\n🎬 {title}\n📅 Year: {year or 'N/A'}\n🔑 Code: <code>{code}</code>\n\nAdd to main bot?",
+                    f"📽 <b>Movie Detected!</b>\n\n"
+                    f"🎬 {title}\n"
+                    f"📅 Year: {year if year else 'Not specified'}\n"
+                    f"🔑 Code: <code>{code}</code>\n\n"
+                    f"Add to main bot?",
                     reply_markup=keyboard)
 
         elif 'callback_query' in update:
@@ -150,12 +151,12 @@ def webhook():
                 ok, _ = send_to_main_bot(code, msg_id, title, year, desc)
                 if ok:
                     cursor.execute("UPDATE pending_movies SET status='added' WHERE code=?", (code,))
-                    send_message(chat_id, f"✅ {title} added to main bot.")
+                    send_message(chat_id, f"✅ <b>{title}</b> added to main bot!")
                 else:
-                    send_message(chat_id, f"❌ Failed to add {title}.")
+                    send_message(chat_id, f"❌ Failed to add <b>{title}</b>.")
             else:
                 cursor.execute("UPDATE pending_movies SET status='cancelled' WHERE code=?", (code,))
-                send_message(chat_id, f"❌ {title} cancelled.")
+                send_message(chat_id, f"❌ <b>{title}</b> cancelled.")
 
             conn.commit()
             conn.close()
@@ -168,14 +169,15 @@ def webhook():
 
 @app.route('/')
 def index():
-    return "Helper Bot with buttons"
+    return "🎬 Helper Bot is running!"
 
 @app.route('/health')
 def health():
-    return "ok"
+    return jsonify({'status': 'healthy'})
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-    url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
-    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={url}")
+    webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}")
+    logging.info(f"✅ Webhook set to {webhook_url}")
     app.run(host='0.0.0.0', port=port)
