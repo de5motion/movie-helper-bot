@@ -12,6 +12,11 @@ TOKEN = "8660161351:AAGdM3sN3Sfi3zd8T0e_AOeFjhwAczQDyHw"
 PRIVATE_CHANNEL = -1003800629563
 ADMIN_ID = 6777360306  # Your correct Telegram ID
 
+# ===== MAIN BOT DATABASE PATH =====
+# This assumes your main bot's database is in the same directory
+# If your main bot is on a different server, you'll need to use API calls
+MAIN_BOT_DB_PATH = "movies.db"  # Path to your main bot's database
+
 # ===== INITIALIZE FLASK =====
 app = Flask(__name__)
 
@@ -36,7 +41,8 @@ def init_db():
                 title TEXT,
                 year INTEGER,
                 description TEXT,
-                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                synced INTEGER DEFAULT 0
             )
         ''')
         
@@ -60,6 +66,58 @@ def init_db():
         logging.error(f"Database error: {e}")
 
 init_db()
+
+# ===== MAIN BOT SYNC FUNCTIONS =====
+def add_movie_to_main_bot(code, message_id, title, year, description=""):
+    """Add movie to main bot's database"""
+    try:
+        # Connect to main bot's database
+        conn = sqlite3.connect(MAIN_BOT_DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if movies table exists in main bot
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='movies'")
+        if not cursor.fetchone():
+            logging.error("Main bot movies table not found")
+            return False
+        
+        # Add movie to main bot
+        cursor.execute('''
+            INSERT OR REPLACE INTO movies (code, message_id, title, year, description, added_date, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'active')
+        ''', (code, message_id, title, year, description, datetime.now()))
+        
+        conn.commit()
+        conn.close()
+        logging.info(f"Movie added to main bot: {code} - {title}")
+        return True
+    except Exception as e:
+        logging.error(f"Error adding to main bot: {e}")
+        return False
+
+def sync_all_movies():
+    """Sync all unsynced movies to main bot"""
+    try:
+        conn = sqlite3.connect('movies_helper.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT code, message_id, title, year, description FROM movies WHERE synced = 0")
+        unsynced = cursor.fetchall()
+        
+        synced_count = 0
+        for code, msg_id, title, year, desc in unsynced:
+            if add_movie_to_main_bot(code, msg_id, title, year, desc):
+                cursor.execute("UPDATE movies SET synced = 1 WHERE code = ?", (code,))
+                synced_count += 1
+        
+        conn.commit()
+        conn.close()
+        
+        if synced_count > 0:
+            logging.info(f"Synced {synced_count} movies to main bot")
+        return synced_count
+    except Exception as e:
+        logging.error(f"Sync error: {e}")
+        return 0
 
 # ===== HELPER FUNCTIONS =====
 def send_message(chat_id, text, reply_markup=None):
@@ -130,28 +188,40 @@ def extract_movie_info(text):
     return title, year
 
 def save_movie(code, message_id, title, year, description=""):
-    """Save movie to database"""
+    """Save movie to helper database and sync to main bot"""
     try:
+        # Save to helper database
         conn = sqlite3.connect('movies_helper.db')
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO movies (code, message_id, title, year, description)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (code.upper(), message_id, title, year, description))
+            INSERT OR REPLACE INTO movies (code, message_id, title, year, description, synced)
+            VALUES (?, ?, ?, ?, ?, 0)
+        ''', (code, message_id, title, year, description))
         conn.commit()
         conn.close()
-        logging.info(f"Movie saved: {code} - {title}")
-        return True
+        logging.info(f"Movie saved to helper: {code} - {title}")
+        
+        # Sync to main bot immediately
+        if add_movie_to_main_bot(code, message_id, title, year, description):
+            # Mark as synced
+            conn = sqlite3.connect('movies_helper.db')
+            cursor = conn.cursor()
+            cursor.execute("UPDATE movies SET synced = 1 WHERE code = ?", (code,))
+            conn.commit()
+            conn.close()
+            return True
+        else:
+            return True  # Saved to helper but sync failed - will retry later
     except Exception as e:
-        logging.error(f"Error saving: {e}")
+        logging.error(f"Error saving movie: {e}")
         return False
 
 def get_all_movies():
-    """Get all movies"""
+    """Get all movies from helper"""
     try:
         conn = sqlite3.connect('movies_helper.db')
         cursor = conn.cursor()
-        cursor.execute("SELECT code, message_id, title, year, description FROM movies ORDER BY year DESC")
+        cursor.execute("SELECT code, message_id, title, year, description, synced FROM movies ORDER BY year DESC")
         movies = cursor.fetchall()
         conn.close()
         return movies
@@ -160,16 +230,28 @@ def get_all_movies():
         return []
 
 def delete_movie(code):
-    """Delete movie"""
+    """Delete movie from both databases"""
     try:
+        # Delete from helper
         conn = sqlite3.connect('movies_helper.db')
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM movies WHERE code = ?", (code.upper(),))
+        cursor.execute("DELETE FROM movies WHERE code = ?", (code,))
         conn.commit()
         conn.close()
+        
+        # Delete from main bot
+        try:
+            conn = sqlite3.connect(MAIN_BOT_DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM movies WHERE code = ?", (code,))
+            conn.commit()
+            conn.close()
+        except:
+            pass
+        
         return True
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"Error deleting: {e}")
         return False
 
 # ===== PROCESS UPDATES =====
@@ -189,42 +271,68 @@ def process_update(update):
                 
                 # Extract movie info
                 title, year = extract_movie_info(content)
-                code = f"INT{message_id}"
+                # Use message_id as numeric code
+                code = str(message_id)
                 
-                # Save to pending
-                conn = sqlite3.connect('movies_helper.db')
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT OR REPLACE INTO pending_movies (message_id, chat_id, title, year, description)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (message_id, chat_id, title, year, content[:500]))
-                conn.commit()
-                conn.close()
+                # AUTO-ADD to database immediately
+                success = save_movie(code, message_id, title, year, content[:500])
                 
-                # Notify admin
-                keyboard = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "✅ ADD MOVIE", "callback_data": f"add_{message_id}"},
-                            {"text": "❌ SKIP", "callback_data": f"skip_{message_id}"}
-                        ],
-                        [
-                            {"text": "📋 VIEW DETAILS", "callback_data": f"view_{message_id}"}
+                if success:
+                    # Notify admin that movie was added
+                    keyboard = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "📋 VIEW MOVIE", "callback_data": f"view_{message_id}"},
+                                {"text": "🗑️ DELETE", "callback_data": f"delete_{message_id}"}
+                            ]
                         ]
-                    ]
-                }
+                    }
+                    
+                    send_message(
+                        ADMIN_ID,
+                        f"🎬 <b>MOVIE AUTO-ADDED TO DATABASE!</b>\n\n"
+                        f"📝 <b>Title:</b> {title}\n"
+                        f"📅 <b>Year:</b> {year if year else 'Unknown'}\n"
+                        f"🆔 <b>Message ID:</b> <code>{message_id}</code>\n"
+                        f"🔑 <b>Code:</b> <code>{code}</code>\n"
+                        f"✅ <b>Status:</b> Added to main bot\n\n"
+                        f"📄 <b>Preview:</b>\n{content[:150]}...",
+                        keyboard
+                    )
+                else:
+                    # Save to pending if auto-add failed
+                    conn = sqlite3.connect('movies_helper.db')
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO pending_movies (message_id, chat_id, title, year, description)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (message_id, chat_id, title, year, content[:500]))
+                    conn.commit()
+                    conn.close()
+                    
+                    # Notify admin for manual approval
+                    keyboard = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "✅ ADD MANUALLY", "callback_data": f"add_{message_id}"},
+                                {"text": "❌ SKIP", "callback_data": f"skip_{message_id}"}
+                            ]
+                        ]
+                    }
+                    
+                    send_message(
+                        ADMIN_ID,
+                        f"⚠️ <b>MOVIE DETECTED - NEEDS MANUAL ADD</b>\n\n"
+                        f"📝 <b>Title:</b> {title}\n"
+                        f"📅 <b>Year:</b> {year if year else 'Unknown'}\n"
+                        f"🆔 <b>Message ID:</b> <code>{message_id}</code>\n"
+                        f"🔑 <b>Auto Code:</b> <code>{code}</code>\n"
+                        f"❌ <b>Auto-add failed</b> - Please add manually\n\n"
+                        f"📄 <b>Preview:</b>\n{content[:150]}...",
+                        keyboard
+                    )
                 
-                send_message(
-                    ADMIN_ID,
-                    f"🎬 <b>NEW MOVIE DETECTED!</b>\n\n"
-                    f"📝 <b>Title:</b> {title}\n"
-                    f"📅 <b>Year:</b> {year if year else 'Unknown'}\n"
-                    f"🆔 <b>Message ID:</b> <code>{message_id}</code>\n"
-                    f"🔑 <b>Auto Code:</b> <code>{code}</code>\n\n"
-                    f"📄 <b>Preview:</b>\n{content[:150]}...",
-                    keyboard
-                )
-                logging.info(f"New movie detected: {message_id} - {title}")
+                logging.info(f"Movie processed: {message_id} - {title} - Code: {code}")
                 return
         
         # Handle messages
@@ -246,22 +354,34 @@ def process_update(update):
                         "inline_keyboard": [
                             [{"text": "📋 ALL MOVIES", "callback_data": "list_all"}],
                             [{"text": "⏳ PENDING MOVIES", "callback_data": "list_pending"}],
+                            [{"text": "🔄 SYNC NOW", "callback_data": "sync_now"}],
                             [{"text": "🔍 GET MESSAGE INFO", "callback_data": "get_msg_info"}],
                             [{"text": "➕ ADD MANUAL", "callback_data": "add_manual"}]
                         ]
                     }
+                    
+                    # Check sync status
+                    conn = sqlite3.connect('movies_helper.db')
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM movies WHERE synced = 0")
+                    unsynced = cursor.fetchone()[0]
+                    conn.close()
+                    
+                    status = f"\n\n📊 <b>Sync Status:</b> {unsynced} unsynced movies"
+                    
                     send_message(
                         chat_id,
                         "<b>🎬 MOVIE ID HELPER BOT</b>\n\n"
                         "<b>📌 Commands:</b>\n"
                         "/list - Show all movies\n"
                         "/pending - Show pending movies\n"
+                        "/sync - Sync unsynced movies to main bot\n"
                         "/get MSG_ID - Get message info\n"
                         "/forward MSG_ID - Forward message to you\n"
                         "/add CODE MSG_ID TITLE YEAR - Add movie manually\n"
                         "/delete CODE - Delete movie\n\n"
-                        f"<b>📢 Channel ID:</b> <code>{PRIVATE_CHANNEL}</code>\n\n"
-                        "<i>When you send a movie to the channel, it will auto-detect!</i>",
+                        f"<b>📢 Channel ID:</b> <code>{PRIVATE_CHANNEL}</code>\n"
+                        f"<b>✅ Auto-add:</b> Enabled" + status,
                         keyboard
                     )
                 
@@ -269,12 +389,14 @@ def process_update(update):
                     movies = get_all_movies()
                     if movies:
                         response = "<b>📋 ALL MOVIES IN DATABASE:</b>\n\n"
-                        for code, msg_id, title, year, desc in movies:
+                        for code, msg_id, title, year, desc, synced in movies:
+                            status = "✅ Synced" if synced else "⏳ Pending"
                             response += f"• <b>{title}</b> ({year})\n"
-                            response += f"  🔑 Code: <code>{code}</code> | 🆔 Msg ID: <code>{msg_id}</code>\n\n"
+                            response += f"  🔑 Code: <code>{code}</code> | 🆔 Msg ID: <code>{msg_id}</code>\n"
+                            response += f"  📊 Status: {status}\n\n"
                         send_message(chat_id, response[:4000])
                     else:
-                        send_message(chat_id, "📭 <b>No movies in database</b>\n\nAdd movies by sending them to your private channel!")
+                        send_message(chat_id, "📭 <b>No movies in database</b>\n\nSend movies to your private channel to auto-add them!")
                 
                 elif text == "/pending":
                     conn = sqlite3.connect('movies_helper.db')
@@ -288,10 +410,18 @@ def process_update(update):
                         for pid, msg_id, title, year in pending:
                             response += f"• 🆔 Msg ID: <code>{msg_id}</code>\n"
                             response += f"  📝 Title: {title}\n"
-                            response += f"  📅 Year: {year if year else 'Unknown'}\n\n"
+                            response += f"  📅 Year: {year if year else 'Unknown'}\n"
+                            response += f"  🔑 Code: <code>{msg_id}</code>\n\n"
                         send_message(chat_id, response)
                     else:
-                        send_message(chat_id, "✅ <b>No pending movies</b>\n\nAll movies have been processed!")
+                        send_message(chat_id, "✅ <b>No pending movies</b>\n\nAll movies have been auto-added!")
+                
+                elif text == "/sync":
+                    count = sync_all_movies()
+                    if count > 0:
+                        send_message(chat_id, f"✅ <b>Synced {count} movies to main bot!</b>")
+                    else:
+                        send_message(chat_id, "✅ <b>All movies are already synced!</b>")
                 
                 elif text.startswith("/get"):
                     parts = text.split()
@@ -307,18 +437,20 @@ def process_update(update):
                                 response = (
                                     f"<b>📝 MESSAGE INFORMATION</b>\n\n"
                                     f"🆔 <b>Message ID:</b> <code>{msg['message_id']}</code>\n"
+                                    f"🔑 <b>Movie Code:</b> <code>{msg['message_id']}</code>\n"
                                     f"📅 <b>Date:</b> {datetime.fromtimestamp(msg['date']).strftime('%Y-%m-%d %H:%M:%S')}\n"
                                     f"📄 <b>Content:</b>\n{content[:300]}\n\n"
                                     f"<b>✨ Use this in your main bot:</b>\n"
+                                    f"<code>code = {msg['message_id']}</code>\n"
                                     f"<code>message_id = {msg['message_id']}</code>"
                                 )
                                 send_message(chat_id, response)
                             else:
-                                send_message(chat_id, f"❌ <b>Message {msg_id} not found</b>\n\nMake sure the message exists in your private channel.")
+                                send_message(chat_id, f"❌ <b>Message {msg_id} not found</b>")
                         except ValueError:
-                            send_message(chat_id, "❌ <b>Invalid message ID</b>\n\nUse: /get 12345")
+                            send_message(chat_id, "❌ <b>Invalid message ID</b>")
                     else:
-                        send_message(chat_id, "❌ <b>Usage:</b> /get MESSAGE_ID\n\nExample: /get 12345")
+                        send_message(chat_id, "❌ <b>Usage:</b> /get MESSAGE_ID")
                 
                 elif text.startswith("/forward"):
                     parts = text.split()
@@ -327,13 +459,13 @@ def process_update(update):
                             msg_id = int(parts[1])
                             result = forward_message(chat_id, PRIVATE_CHANNEL, msg_id)
                             if result and result.get("ok"):
-                                send_message(chat_id, f"✅ <b>Message {msg_id} forwarded to you!</b>\n\nCheck your chat for the message.")
+                                send_message(chat_id, f"✅ <b>Message {msg_id} forwarded to you!</b>")
                             else:
-                                send_message(chat_id, f"❌ <b>Failed to forward message {msg_id}</b>\n\nMake sure the message exists.")
+                                send_message(chat_id, f"❌ <b>Failed to forward message {msg_id}</b>")
                         except ValueError:
                             send_message(chat_id, "❌ <b>Invalid message ID</b>")
                     else:
-                        send_message(chat_id, "❌ <b>Usage:</b> /forward MESSAGE_ID\n\nExample: /forward 12345")
+                        send_message(chat_id, "❌ <b>Usage:</b> /forward MESSAGE_ID")
                 
                 elif text.startswith("/add"):
                     parts = text.split(maxsplit=4)
@@ -342,28 +474,27 @@ def process_update(update):
                         try:
                             msg_id = int(msg_id)
                             year = int(year)
+                            if not code.isdigit():
+                                send_message(chat_id, "❌ <b>Code must be numeric only!</b>")
+                                return
                             if save_movie(code, msg_id, title, year):
-                                send_message(chat_id, f"✅ <b>Movie added successfully!</b>\n\n🔑 Code: <code>{code}</code>\n📝 Title: {title}\n🆔 Msg ID: <code>{msg_id}</code>")
+                                send_message(chat_id, f"✅ <b>Movie added and synced!</b>\n\n🔑 Code: <code>{code}</code>\n📝 Title: {title}")
                             else:
-                                send_message(chat_id, "❌ <b>Failed to add movie</b>\n\nCheck the database.")
+                                send_message(chat_id, "❌ <b>Failed to add movie</b>")
                         except ValueError:
-                            send_message(chat_id, "❌ <b>Invalid message ID or year</b>\n\nMessage ID and year must be numbers.")
+                            send_message(chat_id, "❌ <b>Invalid message ID or year</b>")
                     else:
-                        send_message(chat_id, "❌ <b>Usage:</b> /add CODE MESSAGE_ID TITLE YEAR\n\nExample:\n/add INT001 12345 'Inception' 2010")
+                        send_message(chat_id, "❌ <b>Usage:</b> /add CODE MESSAGE_ID TITLE YEAR\n\nExample: /add 12345 12345 'Inception' 2010")
                 
                 elif text.startswith("/delete"):
                     parts = text.split()
                     if len(parts) == 2:
-                        code = parts[1]
-                        if delete_movie(code):
-                            send_message(chat_id, f"✅ <b>Movie {code} deleted successfully!</b>")
+                        if delete_movie(parts[1]):
+                            send_message(chat_id, f"✅ <b>Movie {parts[1]} deleted from both databases!</b>")
                         else:
-                            send_message(chat_id, f"❌ <b>Movie {code} not found</b>")
+                            send_message(chat_id, f"❌ <b>Movie {parts[1]} not found</b>")
                     else:
-                        send_message(chat_id, "❌ <b>Usage:</b> /delete CODE\n\nExample: /delete INT001")
-                
-                elif text.startswith("/"):
-                    send_message(chat_id, "❌ <b>Unknown command</b>\n\nUse /start to see available commands.")
+                        send_message(chat_id, "❌ <b>Usage:</b> /delete CODE")
         
         # Handle callback queries
         elif "callback_query" in update:
@@ -371,7 +502,6 @@ def process_update(update):
             chat_id = callback["message"]["chat"]["id"]
             data = callback["data"]
             
-            # Answer callback
             try:
                 url = f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery"
                 requests.post(url, json={"callback_query_id": callback["id"]})
@@ -380,7 +510,6 @@ def process_update(update):
             
             if data.startswith("add_"):
                 msg_id = int(data.split("_")[1])
-                
                 conn = sqlite3.connect('movies_helper.db')
                 cursor = conn.cursor()
                 cursor.execute("SELECT title, year, description FROM pending_movies WHERE message_id = ?", (msg_id,))
@@ -388,15 +517,11 @@ def process_update(update):
                 
                 if result:
                     title, year, desc = result
-                    code = f"INT{msg_id}"
+                    code = str(msg_id)
                     if save_movie(code, msg_id, title, year, desc):
                         cursor.execute("DELETE FROM pending_movies WHERE message_id = ?", (msg_id,))
                         conn.commit()
-                        send_message(chat_id, f"✅ <b>Movie added to database!</b>\n\n🔑 Code: <code>{code}</code>\n📝 Title: {title}\n🆔 Msg ID: <code>{msg_id}</code>")
-                    else:
-                        send_message(chat_id, "❌ <b>Failed to add movie</b>")
-                else:
-                    send_message(chat_id, "❌ <b>Movie not found in pending</b>")
+                        send_message(chat_id, f"✅ <b>Movie added and synced!</b>\n\nCode: <code>{code}</code>\nTitle: {title}")
                 conn.close()
             
             elif data.startswith("skip_"):
@@ -406,43 +531,43 @@ def process_update(update):
                 cursor.execute("DELETE FROM pending_movies WHERE message_id = ?", (msg_id,))
                 conn.commit()
                 conn.close()
-                send_message(chat_id, f"⏭️ <b>Skipped message {msg_id}</b>\n\nYou can always add it manually with /add")
+                send_message(chat_id, f"⏭️ <b>Skipped message {msg_id}</b>")
+            
+            elif data == "sync_now":
+                count = sync_all_movies()
+                send_message(chat_id, f"✅ <b>Synced {count} movies to main bot!</b>")
             
             elif data == "list_all":
                 movies = get_all_movies()
                 if movies:
                     response = "<b>📋 MOVIES IN DATABASE:</b>\n\n"
-                    for code, msg_id, title, year, desc in movies[:15]:
-                        response += f"• {title} ({year}) - <code>{code}</code>\n"
-                    if len(movies) > 15:
-                        response += f"\n... and {len(movies)-15} more\nUse /list for full list"
+                    for code, msg_id, title, year, desc, synced in movies[:15]:
+                        status = "✅" if synced else "⏳"
+                        response += f"{status} {title} ({year}) - Code: <code>{code}</code>\n"
                     send_message(chat_id, response)
                 else:
-                    send_message(chat_id, "📭 No movies in database")
+                    send_message(chat_id, "📭 No movies")
             
             elif data == "list_pending":
                 conn = sqlite3.connect('movies_helper.db')
                 cursor = conn.cursor()
-                cursor.execute("SELECT message_id, title, year FROM pending_movies ORDER BY date_received DESC")
+                cursor.execute("SELECT message_id, title, year FROM pending_movies")
                 pending = cursor.fetchall()
                 conn.close()
                 
                 if pending:
-                    response = "<b>⏳ PENDING MOVIES:</b>\n\n"
+                    response = "<b>⏳ PENDING:</b>\n\n"
                     for msg_id, title, year in pending:
-                        response += f"• 🆔 <code>{msg_id}</code> - {title}"
-                        if year:
-                            response += f" ({year})"
-                        response += "\n"
+                        response += f"• <code>{msg_id}</code> - {title}\n"
                     send_message(chat_id, response)
                 else:
-                    send_message(chat_id, "✅ No pending movies")
+                    send_message(chat_id, "✅ No pending")
             
             elif data == "get_msg_info":
-                send_message(chat_id, "🔍 <b>Get Message Info</b>\n\nSend: /get MESSAGE_ID\n\nExample: /get 12345")
+                send_message(chat_id, "🔍 Send: /get MESSAGE_ID")
             
             elif data == "add_manual":
-                send_message(chat_id, "➕ <b>Add Movie Manually</b>\n\nUse command:\n<code>/add CODE MESSAGE_ID TITLE YEAR</code>\n\nExample:\n<code>/add INT001 12345 'Inception' 2010</code>")
+                send_message(chat_id, "➕ Use: /add CODE MESSAGE_ID TITLE YEAR\n\nExample: /add 12345 12345 'Inception' 2010")
     
     except Exception as e:
         logging.error(f"Error processing update: {e}")
@@ -455,7 +580,7 @@ def helper_webhook():
     try:
         update = request.get_json()
         if update:
-            logging.info(f"Helper received update: {update.get('update_id')}")
+            logging.info(f"Helper received update")
             process_update(update)
         return jsonify({'status': 'ok'})
     except Exception as e:
@@ -464,7 +589,7 @@ def helper_webhook():
 
 @app.route('/')
 def index():
-    return "🎬 Movie ID Helper Bot is running!\n\nSend /start to the bot to begin."
+    return "🎬 Movie ID Helper Bot is running!\n\nMovies are auto-added to main bot database!"
 
 @app.route('/health')
 def health():
@@ -474,15 +599,19 @@ def health():
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM movies")
         movie_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM pending_movies")
-        pending_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM movies WHERE synced = 0")
+        unsynced = cursor.fetchone()[0]
         conn.close()
+        
+        # Check if main bot database exists
+        main_bot_exists = os.path.exists(MAIN_BOT_DB_PATH)
         
         return jsonify({
             'status': 'healthy',
             'bot': 'helper',
             'movies_count': movie_count,
-            'pending_count': pending_count,
+            'unsynced_count': unsynced,
+            'main_bot_db_exists': main_bot_exists,
             'admin_id': ADMIN_ID,
             'channel_id': PRIVATE_CHANNEL,
             'timestamp': datetime.now().isoformat()
@@ -508,9 +637,6 @@ def setup_webhook():
                 else:
                     logging.error(f"❌ Failed: {result}")
                     return False
-            else:
-                logging.error(f"❌ HTTP error: {response.status_code}")
-                return False
         else:
             logging.warning("⚠️ Running locally - webhook not set")
             return False
