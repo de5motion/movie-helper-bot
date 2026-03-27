@@ -137,50 +137,83 @@ def extract_movie_info(text):
     return title, year
 
 def send_movie_to_main_bot(code, message_id, title, year, description=""):
-    """Send movie to main bot via API"""
+    """Send movie to main bot via API - FIXED VERSION"""
     try:
         url = f"{MAIN_BOT_URL}/add_movie"
         
+        # Ensure all data types are correct for the API
         payload = {
-            "code": code,
-            "message_id": message_id,
-            "title": title,
-            "year": year,
-            "description": description[:500],
-            "secret": API_SECRET
+            "code": str(code),  # String
+            "message_id": int(message_id),  # Integer
+            "title": str(title),  # String
+            "year": int(year),  # Integer
+            "description": str(description)[:500] if description else "",  # String
+            "secret": str(API_SECRET)  # String
         }
         
-        logging.info(f"Sending to main bot: {url}")
-        logging.info(f"Payload: code={code}, title={title}")
+        # Debug logging
+        logging.info(f"📤 Sending to main bot: {url}")
+        logging.info(f"📦 Payload: {payload}")
         
-        response = requests.post(url, json=payload, timeout=15)
+        # Send request with proper headers
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
+        
+        # Debug response
+        logging.info(f"📥 Response Status: {response.status_code}")
+        logging.info(f"📥 Response Body: {response.text}")
         
         if response.status_code == 200:
-            result = response.json()
-            if result.get('status') == 'success':
-                logging.info(f"✅ Movie sent to main bot: {code}")
-                return True, None
-            else:
-                error = result.get('error', 'Unknown error')
-                logging.error(f"Main bot error: {error}")
-                return False, error
+            try:
+                result = response.json()
+                if result.get('status') == 'success':
+                    logging.info(f"✅ Movie sent to main bot successfully: {code}")
+                    return True, None
+                else:
+                    error = result.get('error', 'Unknown error')
+                    logging.error(f"❌ Main bot error: {error}")
+                    return False, error
+            except Exception as e:
+                logging.error(f"❌ Failed to parse response: {e}")
+                return False, f"Parse error: {e}"
+        elif response.status_code == 400:
+            logging.error(f"❌ Bad request (400). Check payload format.")
+            logging.error(f"Response: {response.text}")
+            return False, f"Bad request: {response.text}"
+        elif response.status_code == 401:
+            logging.error(f"❌ Unauthorized (401). Secret key mismatch!")
+            return False, "Unauthorized - Secret key mismatch"
         else:
-            logging.error(f"HTTP error: {response.status_code} - {response.text}")
+            logging.error(f"❌ HTTP error: {response.status_code}")
             return False, f"HTTP {response.status_code}"
             
     except requests.exceptions.Timeout:
-        logging.error("Timeout connecting to main bot")
+        logging.error("⏰ Timeout connecting to main bot")
         return False, "Timeout"
     except requests.exceptions.ConnectionError:
-        logging.error("Cannot connect to main bot - check URL")
+        logging.error(f"🔌 Cannot connect to main bot - check URL: {MAIN_BOT_URL}")
         return False, "Connection failed"
     except Exception as e:
-        logging.error(f"Error sending to main bot: {e}")
+        logging.error(f"❌ Error sending to main bot: {e}")
         return False, str(e)
 
 def save_movie_and_sync(code, message_id, title, year, description=""):
     """Save movie locally and sync to main bot"""
     try:
+        # Convert and validate types
+        code = str(code).strip()
+        message_id = int(message_id)
+        year = int(year)
+        title = str(title).strip()
+        description = str(description)[:500] if description else ""
+        
+        # Validate
+        if not code or not title:
+            return False, "Invalid movie data"
+        
         # Save to local database first
         conn = sqlite3.connect('movies_helper.db')
         cursor = conn.cursor()
@@ -191,7 +224,7 @@ def save_movie_and_sync(code, message_id, title, year, description=""):
         conn.commit()
         conn.close()
         
-        logging.info(f"Movie saved locally: {code} - {title}")
+        logging.info(f"💾 Movie saved locally: {code} - {title}")
         
         # Try to sync with main bot
         success, error = send_movie_to_main_bot(code, message_id, title, year, description)
@@ -214,7 +247,7 @@ def save_movie_and_sync(code, message_id, title, year, description=""):
             return False, error
             
     except Exception as e:
-        logging.error(f"Error saving movie: {e}")
+        logging.error(f"❌ Error saving movie: {e}")
         return False, str(e)
 
 def get_all_movies():
@@ -264,16 +297,22 @@ def sync_all_unsynced():
         cursor.execute("SELECT code, message_id, title, year, description FROM movies WHERE synced = 0")
         unsynced = cursor.fetchall()
         
+        if not unsynced:
+            return 0
+        
+        logging.info(f"🔄 Found {len(unsynced)} unsynced movies")
+        
         synced_count = 0
         for code, msg_id, title, year, desc in unsynced:
+            logging.info(f"🔄 Syncing: {code} - {title}")
             success, error = send_movie_to_main_bot(code, msg_id, title, year, desc)
             if success:
                 cursor.execute("UPDATE movies SET synced = 1, sync_error = NULL WHERE code = ?", (code,))
                 synced_count += 1
-                logging.info(f"Synced: {code}")
+                logging.info(f"✅ Synced: {code}")
             else:
                 cursor.execute("UPDATE movies SET sync_error = ? WHERE code = ?", (error, code))
-                logging.warning(f"Failed to sync: {code} - {error}")
+                logging.warning(f"⚠️ Failed to sync: {code} - {error}")
         
         conn.commit()
         conn.close()
