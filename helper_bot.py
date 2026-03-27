@@ -13,8 +13,7 @@ PRIVATE_CHANNEL = -1003800629563
 ADMIN_ID = 6777360306  # Your Telegram ID
 
 # ===== MAIN BOT API CONFIGURATION =====
-# IMPORTANT: Change this to your main bot's actual URL!
-MAIN_BOT_URL = "https://your-main-bot.onrender.com"  # REPLACE WITH YOUR MAIN BOT URL
+MAIN_BOT_URL = "https://movie-bot-8-9cnw.onrender.com"  # Your main bot URL
 API_SECRET = "movie_bot_secret_2024_67890"  # Must match the secret in main bot
 
 # ===== INITIALIZE FLASK =====
