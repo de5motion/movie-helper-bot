@@ -10,6 +10,10 @@ import io
 
 # ===== CONFIGURATION =====
 TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
+
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    return jsonify({'status': 'ok'}), 200
 MAIN_BOT_API_URL = "https://movie-bot-7qmx.onrender.com/add_movie"
 API_SECRET = "movie_bot_secret_2024_67890"
 ADMIN_ID = 6777360306
