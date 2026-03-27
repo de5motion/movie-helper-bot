@@ -9,7 +9,7 @@ import os
 
 # ===== CONFIGURATION =====
 TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"  # Helper bot token
-MAIN_BOT_API_URL = "https://movie-bot-8-9cnw.onrender.com/add_movie"
+MAIN_BOT_API_URL = "https://movie-bot-7qmx.onrender.com/add_movie"  # ОБНОВЛЕННЫЙ URL
 API_SECRET = "movie_bot_secret_2024_67890"
 ADMIN_ID = 6777360306  # Your Telegram ID
 
@@ -84,7 +84,7 @@ def save_pending_movie(code, message_id, title, year, description, channel_msg_i
         cursor.execute('''
             INSERT INTO pending_movies (code, message_id, title, year, description, channel_message_id, status)
             VALUES (?, ?, ?, ?, ?, ?, 'pending')
-        ''', (code, message_id, title, year, description, channel_msg_id))
+        ''', (code, message_id, title, year if year else 0, description, channel_msg_id))
         conn.commit()
         conn.close()
         return True
@@ -100,7 +100,7 @@ def send_to_main_bot(code, message_id, title, year, description):
             'code': code,
             'message_id': message_id,
             'title': title,
-            'year': year if year else 0,  # Если года нет, отправляем 0
+            'year': year if year else 0,
             'description': description
         }
         
@@ -322,7 +322,7 @@ async def pending_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     text = "📋 <b>Pending Movies:</b>\n\n"
     for code, title, year, created_at in movies:
-        year_text = f" ({year})" if year else ""
+        year_text = f" ({year})" if year and year != 0 else ""
         text += f"• <b>{title}</b>{year_text} - <code>{code}</code>\n"
         text += f"  Added: {created_at[:16]}\n\n"
     
