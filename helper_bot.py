@@ -369,7 +369,6 @@ def process_update(update):
         elif "callback_query" in update:
             callback = update["callback_query"]
             chat_id = callback["message"]["chat"]["id"]
-            message_id = callback["message"]["message_id"]
             data = callback["data"]
             
             # Answer callback
@@ -471,4 +470,5 @@ def index():
 def health():
     """Health check"""
     try:
-        conn = sqlite
+        conn = sqlite3.connect('movies_helper.db')
+        cursor = conn.cursor(
