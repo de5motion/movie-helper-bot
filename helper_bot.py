@@ -12,7 +12,10 @@ ADMIN_ID = 6777360306
 PRIVATE_CHANNEL = -1003800629563  # ID вашего приватного канала
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 def init_db():
     conn = sqlite3.connect('helper_movies.db')
@@ -32,6 +35,8 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
+    logging.info("Database initialized")
+
 init_db()
 
 def send_message(chat_id, text, reply_markup=None):
@@ -91,6 +96,8 @@ def send_to_main_bot(code, message_id, title, year, description):
 def webhook():
     try:
         update = request.get_json()
+        logging.info(f"📩 Received update: {update}")  # Логируем всё, что приходит
+
         if not update:
             return 'ok', 200
 
@@ -99,8 +106,11 @@ def webhook():
             msg = update['channel_post']
             chat_id = msg['chat']['id']
             
+            logging.info(f"📢 Channel post from chat {chat_id}")
+            
             # Проверяем, что это наш приватный канал
             if chat_id != PRIVATE_CHANNEL:
+                logging.info(f"Not our channel: {chat_id} != {PRIVATE_CHANNEL}")
                 return 'ok', 200
             
             text = msg.get('text') or msg.get('caption', '')
@@ -112,6 +122,8 @@ def webhook():
             if not title or not code:
                 logging.warning(f"Не удалось извлечь: {text[:100]}")
                 return 'ok', 200
+            
+            logging.info(f"✅ Extracted: {title} ({year}) - code {code}")
             
             # Сохраняем как pending
             save_pending_movie(code, msg['message_id'], title, year, text[:500], msg['message_id'])
@@ -197,6 +209,14 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
-    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}")
+    
+    # Устанавливаем вебхук с разрешением на channel_post
+    params = {
+        "url": webhook_url,
+        "allowed_updates": ["message", "channel_post", "callback_query"]
+    }
+    response = requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params=params)
     logging.info(f"✅ Webhook set to {webhook_url}")
+    logging.info(f"Response: {response.json()}")
+    
     app.run(host='0.0.0.0', port=port)
