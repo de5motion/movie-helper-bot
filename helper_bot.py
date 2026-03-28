@@ -33,6 +33,8 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
+    logging.info("Database initialized")
+
 init_db()
 
 def send_message(chat_id, text, reply_markup=None):
@@ -53,27 +55,36 @@ def generate_random_code():
     return str(random.randint(10, 999))
 
 def extract_movie_info(text):
-    title = year = code = None
-    for line in text.split('\n'):
+    """Извлекает название и год из текста (код не ищем)"""
+    title = None
+    year = None
+    
+    lines = text.split('\n')
+    for line in lines:
         line = line.strip()
         if not line:
             continue
         
-        # Ищем код: Code: 12345
-        match = re.search(r'(?:Code|Код):?\s*(\d+)', line, re.IGNORECASE)
-        if match:
-            code = match.group(1)
+        # Ищем год: (2009), (2010) и т.д.
+        year_match = re.search(r'\((\d{4})\)', line)
+        if year_match and not year:
+            year = int(year_match.group(1))
+            continue
         
-        # Ищем год: (2024)
-        match = re.search(r'\((\d{4})\)', line)
-        if match and not year:
-            year = int(match.group(1))
+        # Очищаем строку от эмодзи и лишних символов
+        cleaned = re.sub(r'^[🎬📺🎥🎞️📽️✨🔑✅❌⚠️📢📩🇺🇸🇬🇧🔗⬇️🎭📱]+', '', line).strip()
+        cleaned = re.sub(r'\s+', ' ', cleaned)
         
-        # Ищем название: первая непустая строка без эмодзи
-        if not title and line and not line.startswith(('🎬', '📺', 'Code', 'Код', 'Movie')):
-            title = line
+        # Убираем слова-маркеры
+        cleaned = re.sub(r'^(Kino|Movie|Film|Фильм|Кино|Name|Название)\s*', '', cleaned, flags=re.IGNORECASE)
+        
+        # Если это не пустая строка и не содержит только цифры/спецсимволы
+        if cleaned and not re.match(r'^[\d\W]+$', cleaned):
+            # Если это похоже на название
+            if len(cleaned) > 2 and not title:
+                title = cleaned
     
-    return title, year, code
+    return title, year
 
 def save_pending_movie(code, message_id, title, year, description, channel_msg_id):
     conn = sqlite3.connect('helper_movies.db')
@@ -81,7 +92,7 @@ def save_pending_movie(code, message_id, title, year, description, channel_msg_i
     cursor.execute('''
         INSERT INTO pending_movies (code, message_id, title, year, description, channel_message_id, status)
         VALUES (?, ?, ?, ?, ?, ?, 'pending')
-    ''', (code, message_id, title, year or 0, description, channel_msg_id))
+    ''', (code, message_id, title, year or 0, description[:500], channel_msg_id))
     conn.commit()
     conn.close()
 
@@ -92,7 +103,7 @@ def send_to_main_bot(code, message_id, title, year, description):
         'message_id': message_id,
         'title': title,
         'year': year or 0,
-        'description': description
+        'description': description[:500]
     }
     try:
         resp = requests.post(MAIN_BOT_API_URL, json=data, timeout=30)
@@ -123,20 +134,19 @@ def webhook():
             if not text:
                 return 'ok', 200
             
-            # Извлекаем информацию
-            title, year, code = extract_movie_info(text)
+            # Извлекаем название и год
+            title, year = extract_movie_info(text)
             
             if not title:
                 logging.warning(f"Не удалось извлечь название: {text[:100]}")
                 return 'ok', 200
             
-            # Если код не найден — генерируем случайный
-            if not code:
-                code = generate_random_code()
-                logging.info(f"🎲 Сгенерирован код {code} для фильма {title}")
+            # Всегда генерируем случайный код
+            code = generate_random_code()
+            logging.info(f"🎲 Сгенерирован код {code} для фильма {title}")
             
             # Сохраняем как pending
-            save_pending_movie(code, msg['message_id'], title, year, text[:500], msg['message_id'])
+            save_pending_movie(code, msg['message_id'], title, year, text, msg['message_id'])
             
             # Отправляем админу кнопки
             keyboard = {
@@ -147,7 +157,7 @@ def webhook():
             }
             send_message(ADMIN_ID,
                 f"📽 <b>Новый фильм в канале!</b>\n\n"
-                f"🎬 {title}\n"
+                f"🎬 <b>{title}</b>\n"
                 f"📅 Год: {year if year else 'не указан'}\n"
                 f"🔑 Код: <code>{code}</code>\n\n"
                 f"Добавить в базу?",
@@ -198,9 +208,9 @@ def webhook():
             chat_id = msg['chat']['id']
             if msg.get('text') == '/start':
                 send_message(chat_id,
-                    "🎬 <b>Helper Bot (авто-код)</b>\n\n"
+                    "🎬 <b>Helper Bot (авто-генерация кода)</b>\n\n"
                     "Бот автоматически определяет новые фильмы в канале.\n"
-                    "Если код не указан — генерирует случайный (2-3 цифры).\n\n"
+                    "Для каждого фильма генерируется случайный код (2-3 цифры).\n\n"
                     "Просто отправь фильм в канал — я спрошу, добавлять или нет.")
         
         return 'ok', 200
@@ -210,7 +220,7 @@ def webhook():
 
 @app.route('/')
 def index():
-    return "🎬 Helper Bot is running (auto-code)!"
+    return "🎬 Helper Bot is running (auto-code generation)!"
 
 @app.route('/health')
 def health():
