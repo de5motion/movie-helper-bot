@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 import re
+import random
 import requests
 from flask import Flask, request, jsonify
 import os
@@ -9,13 +10,10 @@ TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
 MAIN_BOT_API_URL = "https://movie-bot-7qmx.onrender.com/add_movie"
 API_SECRET = "movie_bot_secret_2024_67890"
 ADMIN_ID = 6777360306
-PRIVATE_CHANNEL = -1003800629563  # ID вашего приватного канала
+PRIVATE_CHANNEL = -1003800629563
 
 app = Flask(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 
 def init_db():
     conn = sqlite3.connect('helper_movies.db')
@@ -35,8 +33,6 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
-    logging.info("Database initialized")
-
 init_db()
 
 def send_message(chat_id, text, reply_markup=None):
@@ -52,19 +48,31 @@ def send_message(chat_id, text, reply_markup=None):
 def answer_callback(callback_id):
     requests.post(f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery", json={"callback_query_id": callback_id})
 
+def generate_random_code():
+    """Генерирует случайный 2- или 3-значный код"""
+    return str(random.randint(10, 999))
+
 def extract_movie_info(text):
     title = year = code = None
     for line in text.split('\n'):
         line = line.strip()
+        if not line:
+            continue
+        
+        # Ищем код: Code: 12345
         match = re.search(r'(?:Code|Код):?\s*(\d+)', line, re.IGNORECASE)
         if match:
             code = match.group(1)
-        match = re.match(r'^(.+?)\s*\((\d{4})\)$', line)
-        if match:
-            title = match.group(1).strip()
-            year = int(match.group(2))
-        elif not title and line and not line.startswith(('📝', 'Code', 'Код')):
+        
+        # Ищем год: (2024)
+        match = re.search(r'\((\d{4})\)', line)
+        if match and not year:
+            year = int(match.group(1))
+        
+        # Ищем название: первая непустая строка без эмодзи
+        if not title and line and not line.startswith(('🎬', '📺', 'Code', 'Код', 'Movie')):
             title = line
+    
     return title, year, code
 
 def save_pending_movie(code, message_id, title, year, description, channel_msg_id):
@@ -96,7 +104,7 @@ def send_to_main_bot(code, message_id, title, year, description):
 def webhook():
     try:
         update = request.get_json()
-        logging.info(f"📩 Received update: {update}")  # Логируем всё, что приходит
+        logging.info(f"📩 Received update: {update}")
 
         if not update:
             return 'ok', 200
@@ -108,9 +116,7 @@ def webhook():
             
             logging.info(f"📢 Channel post from chat {chat_id}")
             
-            # Проверяем, что это наш приватный канал
             if chat_id != PRIVATE_CHANNEL:
-                logging.info(f"Not our channel: {chat_id} != {PRIVATE_CHANNEL}")
                 return 'ok', 200
             
             text = msg.get('text') or msg.get('caption', '')
@@ -119,11 +125,15 @@ def webhook():
             
             # Извлекаем информацию
             title, year, code = extract_movie_info(text)
-            if not title or not code:
-                logging.warning(f"Не удалось извлечь: {text[:100]}")
+            
+            if not title:
+                logging.warning(f"Не удалось извлечь название: {text[:100]}")
                 return 'ok', 200
             
-            logging.info(f"✅ Extracted: {title} ({year}) - code {code}")
+            # Если код не найден — генерируем случайный
+            if not code:
+                code = generate_random_code()
+                logging.info(f"🎲 Сгенерирован код {code} для фильма {title}")
             
             # Сохраняем как pending
             save_pending_movie(code, msg['message_id'], title, year, text[:500], msg['message_id'])
@@ -168,7 +178,7 @@ def webhook():
                 ok, _ = send_to_main_bot(code, msg_id, title, year, desc)
                 if ok:
                     cursor.execute("UPDATE pending_movies SET status='added' WHERE code=?", (code,))
-                    send_message(ADMIN_ID, f"✅ <b>{title}</b> добавлен в базу!")
+                    send_message(ADMIN_ID, f"✅ <b>{title}</b> добавлен в базу!\n🔑 Код: <code>{code}</code>")
                 else:
                     send_message(ADMIN_ID, f"❌ Ошибка добавления <b>{title}</b>.")
             else:
@@ -179,7 +189,7 @@ def webhook():
             conn.close()
             answer_callback(q['id'])
         
-        # ===== ОБЫЧНЫЕ СООБЩЕНИЯ (для /start) =====
+        # ===== ОБЫЧНЫЕ СООБЩЕНИЯ =====
         elif 'message' in update:
             msg = update['message']
             user_id = msg['from']['id']
@@ -188,9 +198,9 @@ def webhook():
             chat_id = msg['chat']['id']
             if msg.get('text') == '/start':
                 send_message(chat_id,
-                    "🎬 <b>Helper Bot (с кнопками)</b>\n\n"
-                    "Бот автоматически определяет новые фильмы в приватном канале\n"
-                    "и присылает кнопки подтверждения.\n\n"
+                    "🎬 <b>Helper Bot (авто-код)</b>\n\n"
+                    "Бот автоматически определяет новые фильмы в канале.\n"
+                    "Если код не указан — генерирует случайный (2-3 цифры).\n\n"
                     "Просто отправь фильм в канал — я спрошу, добавлять или нет.")
         
         return 'ok', 200
@@ -200,7 +210,7 @@ def webhook():
 
 @app.route('/')
 def index():
-    return "🎬 Helper Bot is running (auto + buttons)!"
+    return "🎬 Helper Bot is running (auto-code)!"
 
 @app.route('/health')
 def health():
@@ -210,13 +220,11 @@ if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
     
-    # Устанавливаем вебхук с разрешением на channel_post
     params = {
         "url": webhook_url,
         "allowed_updates": ["message", "channel_post", "callback_query"]
     }
-    response = requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params=params)
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params=params)
     logging.info(f"✅ Webhook set to {webhook_url}")
-    logging.info(f"Response: {response.json()}")
     
     app.run(host='0.0.0.0', port=port)
